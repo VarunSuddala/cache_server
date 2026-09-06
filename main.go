@@ -2,49 +2,62 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
-	"strings"
+	"os"
+	"strconv"
 )
 
 var memory map[string]string
 
-func handleconnection(conn net.Conn) {
-	defer conn.Close()
-	buff := make([]byte, 1024)
-	n, err := conn.Read(buff)
+type ValueType string
 
+const (
+	ARRAY  ValueType = "*"
+	BULK   ValueType = "$"
+	STRING ValueType = "+"
+)
+
+type Value struct {
+	typ   ValueType
+	bulk  string
+	str   string
+	array []Value
+}
+
+func (v *Value) readValue(reader io.Reader) {
+	buff := make([]byte, 4)
+	reader.Read(buff)
+	arrLen, err := strconv.Atoi(string(buff[0]))
 	if err != nil {
 		log.Println(err)
+		return
 	}
-	input := strings.TrimSpace(string(buff[:n]))
-	parts := strings.Fields(input)
-	switch parts[0] {
-	case "SET":
-		set(parts[1], parts[2])
-		fmt.Fprintf(conn, "ECHO - %s", "ok")
-	case "GET":
-		fmt.Fprintf(conn, "ECHO - %s", get(parts[1]))
-
+	for range arrLen {
+		bulk := v.readBulk(reader)
+		v.array = append(v.array, bulk)
 	}
-
 }
 
-func get(key string) string {
+func (v *Value) readBulk(reader io.Reader) Value {
+	buff := make([]byte, 4)
+	reader.Read(buff)
+	n, err := strconv.Atoi(string(buff[1]))
 
-	val, err := memory[key]
-
-	if err == false {
-		return "NOT FOUND"
-
+	if err != nil {
+		log.Print(err)
+		return Value{}
 	}
 
-	return val
+	bulkBuff := make([]byte, n)
+	reader.Read(bulkBuff)
 
+	bulk := string(bulkBuff[:n])
+
+	return Value{typ: BULK, bulk: bulk}
 }
-func set(key string, val string) {
-	memory[key] = val
-}
+
 func main() {
 
 	memory = make(map[string]string)
@@ -55,13 +68,18 @@ func main() {
 	}
 	fmt.Println("server is listening on 8000")
 	defer server.Close()
+
+	conn, err := server.Accept()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer conn.Close()
 	for {
-		connection, err := server.Accept()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		fmt.Println("connected", connection)
-		go handleconnection(connection)
+		v := Value{typ: ARRAY}
+		v.readValue(conn)
+		fmt.Println(v.array)
+		conn.Write([]byte("+ok\r\n"))
+		return
 	}
 }
