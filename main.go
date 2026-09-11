@@ -24,7 +24,7 @@ var db = new_database()
 
 func main() {
 
-	server, err := net.Listen("tcp", "127.0.0.1:8000")
+	server, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -60,9 +60,7 @@ func handleConnection(conn net.Conn) {
 				conn.Write([]byte("-ERR wrong number of arguments for 'SET' command\r\n"))
 				continue
 			}
-			db.mu.Lock()
-			set(parts[1], parts[2])
-			db.mu.Unlock()
+			db.set(parts[1], parts[2])
 			conn.Write([]byte("+OK\r\n"))
 
 		case "GET":
@@ -70,13 +68,36 @@ func handleConnection(conn net.Conn) {
 				conn.Write([]byte("-ERR wrong number of arguments for 'GET' command\r\n"))
 				continue
 			}
-			db.mu.RLock()
-			value, ok := get(parts[1])
-			db.mu.RUnlock()
+			value, ok := db.get(parts[1])
 			if !ok {
 				conn.Write([]byte("$-1\r\n"))
 			} else {
-				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)))
+				buf := make([]byte, 0, 64)
+				buf = fmt.Appendf(buf, "*%d\r\n%s\r\n", len(value), value)
+				conn.Write(buf)
+			}
+		case "DEL":
+			if len(parts) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'DEL' command\r\n"))
+				continue
+			}
+			delete := db.delete(parts[1])
+			if delete {
+				conn.Write([]byte(":1\r\n"))
+			} else {
+				conn.Write([]byte(":0\r\n"))
+			}
+
+		case "EXISTS":
+			if len(parts) != 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for 'EXISTS' command\r\n"))
+				continue
+			}
+			exists := db.exists(parts[1])
+			if exists {
+				conn.Write([]byte(":1\r\n"))
+			} else {
+				conn.Write([]byte(":0\r\n"))
 			}
 
 		default:
@@ -84,15 +105,30 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 }
-
-func set(key, value string) {
-	db.store[key] = value
+func (d *Database) set(key, value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.store[key] = value
+}
+func (d *Database) get(key string) (string, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	value, ok := d.store[key]
+	return value, ok
+}
+func (d *Database) delete(key string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.store[key]; ok {
+		delete(d.store, key)
+		return true
+	}
+	return false
 }
 
-func get(key string) (string, bool) {
-	value, ok := db.store[key]
-	if !ok {
-		return "", false
-	}
-	return value, true
+func (d *Database) exists(key string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	_, ok := d.store[key]
+	return ok
 }
