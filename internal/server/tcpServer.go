@@ -4,7 +4,6 @@ import (
 	"io"
 	"log"
 	"net"
-
 	"github.com/VarunSuddala/redis/internal/config"
 )
 
